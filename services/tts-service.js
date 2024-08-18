@@ -16,35 +16,43 @@ class TextToSpeechService extends EventEmitter {
     if (!partialResponse) { return; }
 
     try {
-      const response = await fetch(
-        `https://api.deepgram.com/v1/speak?model=${process.env.VOICE_MODEL}&encoding=mulaw&sample_rate=8000&container=none`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Token ${process.env.DEEPGRAM_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: partialResponse,
-          }),
-        }
-      );
 
+      let sanitizedResponse = partialResponse
+      .replace(/[\"\'\[\]\{\}]/g, '') // Remove quotes, brackets, and braces
+      .replace(/\\/g, ''); // Remove backslashes
+
+      const obj = {
+        method: 'POST',
+        headers: {
+          'xi-api-key': 'sk_5972256afa14f2025135817ad6a0150f05d68dc734061dc1',
+          'Content-Type': 'application/json',
+          accept: 'audio/wav',
+        },
+        body: JSON.stringify({
+          model_id: 'eleven_turbo_v2_5',
+          text: sanitizedResponse,
+          voice_settings: {
+            stability: 0.3, // Controls the consistency of the voice
+            similarity_boost: 0.8, // Controls how much it tries to maintain the voice tone
+          },
+        }),
+      }
+      console.log(obj)
+      const response = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/XrExE9yKIg1WjnnlVkGX/stream?output_format=ulaw_8000&optimize_streaming_latency=3`,
+        obj
+      );
+      
       if (response.status === 200) {
-        try {
-          const blob = await response.blob();
-          const audioArrayBuffer = await blob.arrayBuffer();
-          const base64String = Buffer.from(audioArrayBuffer).toString('base64');
-          this.emit('speech', partialResponseIndex, base64String, partialResponse, interactionCount);
-        } catch (err) {
-          console.log(err);
-        }
+        const audioArrayBuffer = await response.arrayBuffer();
+
+        this.emit('speech', partialResponseIndex, Buffer.from(audioArrayBuffer).toString('base64'), sanitizedResponse, interactionCount);
       } else {
-        console.log('Deepgram TTS error:');
-        console.log(response);
+        console.log('Eleven Labs Error:');
+        console.log(JSON.stringify(response));
       }
     } catch (err) {
-      console.error('Error occurred in TextToSpeech service');
+      console.error('Error occurred in XI LabsTextToSpeech service');
       console.error(err);
     }
   }

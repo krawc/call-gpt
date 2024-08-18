@@ -19,11 +19,15 @@
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
     "express-ws": "^5.0.2",
+    "fs": "^0.0.1-security",
+    "i18next": "^23.12.2",
     "node-fetch": "^2.7.0",
     "openai": "^4.20.1",
+    "path": "^0.12.7",
     "twilio": "^4.19.3",
     "uuid": "^9.0.1",
-    "wavefile": "^11.0.0"
+    "wavefile": "^11.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@flydotio/dockerfile": "^0.4.11",

@@ -1,92 +1,88 @@
 require('colors');
-const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
 const { Buffer } = require('node:buffer');
 const EventEmitter = require('events');
-
+const WebSocket = require('ws');
 
 class TranscriptionService extends EventEmitter {
   constructor() {
     super();
-    const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-    this.dgConnection = deepgram.listen.live({
-      encoding: 'mulaw',
-      sample_rate: '8000',
-      model: 'nova-2',
-      punctuate: true,
-      interim_results: true,
-      endpointing: 200,
-      utterance_end_ms: 1000
+    const gladiaApiKey = process.env.GLADIA_API_KEY;
+    if (!gladiaApiKey) {
+      throw new Error(
+        'Required variable GLADIA_API_KEY is not defined in the .env file.'
+      );
+    }
+
+    this.gladiaUrl = "wss://api.gladia.io/audio/text/audio-transcription";
+    this.gladiaSocket = new WebSocket(this.gladiaUrl);
+    this.finalResult = '';
+    this.speechFinal = false;
+    this.fisrtGladiaMessage = false;
+
+    this.gladiaSocket.on('open', () => {
+      console.log('STT -> Gladia connection opened'.green);
+      const configuration = {
+        x_gladia_key: gladiaApiKey,
+        language_behaviour: 'manual',
+        language: 'polish',
+        sample_rate: 8000,
+        endpointing: 100,
+        encoding: 'wav/ulaw',
+        bit_depth: 16,
+      };
+      this.gladiaSocket.send(JSON.stringify(configuration));
+      console.log('STT -> Configuration sent to Gladia'.cyan);
     });
 
-    this.finalResult = '';
-    this.speechFinal = false; // used to determine if we have seen speech_final=true indicating that deepgram detected a natural pause in the speakers speech. 
+    this.gladiaSocket.on('message', (event) => {
+      const gladiaMsg = JSON.parse(event.toString());
+      if (gladiaMsg.hasOwnProperty('transcription') && gladiaMsg.type === 'final') {
+        const text = gladiaMsg.transcription;
 
-    this.dgConnection.on(LiveTranscriptionEvents.Open, () => {
-      this.dgConnection.on(LiveTranscriptionEvents.Transcript, (transcriptionEvent) => {
-        const alternatives = transcriptionEvent.channel?.alternatives;
-        let text = '';
-        if (alternatives) {
-          text = alternatives[0]?.transcript;
-        }
-        
-        // if we receive an UtteranceEnd and speech_final has not already happened then we should consider this the end of of the human speech and emit the transcription
-        if (transcriptionEvent.type === 'UtteranceEnd') {
-          if (!this.speechFinal) {
-            console.log(`UtteranceEnd received before speechFinal, emit the text collected so far: ${this.finalResult}`.yellow);
-            this.emit('transcription', this.finalResult);
-            return;
-          } else {
-            console.log('STT -> Speech was already final when UtteranceEnd recevied'.yellow);
-            return;
-          }
-        }
-    
-        // console.log(text, "is_final: ", transcription?.is_final, "speech_final: ", transcription.speech_final);
-        // if is_final that means that this chunk of the transcription is accurate and we need to add it to the finalResult 
-        if (transcriptionEvent.is_final === true && text.trim().length > 0) {
+        console.log(gladiaMsg)
+
+        if (gladiaMsg.confidence > 0.54) {
           this.finalResult += ` ${text}`;
-          // if speech_final and is_final that means this text is accurate and it's a natural pause in the speakers speech. We need to send this to the assistant for processing
-          if (transcriptionEvent.speech_final === true) {
-            this.speechFinal = true; // this will prevent a utterance end which shows up after speechFinal from sending another response
-            this.emit('transcription', this.finalResult);
-            this.finalResult = '';
-          } else {
-            // if we receive a message without speechFinal reset speechFinal to false, this will allow any subsequent utteranceEnd messages to properly indicate the end of a message
-            this.speechFinal = false;
-          }
-        } else {
-          this.emit('utterance', text);
+          this.speechFinal = true;
+          console.log(`STT -> Final transcription: ${this.finalResult.trim()}`.yellow);
+          this.emit('transcription', this.finalResult.trim());
+          this.finalResult = '';
         }
-      });
+      }
+    });
 
-      this.dgConnection.on(LiveTranscriptionEvents.Error, (error) => {
-        console.error('STT -> deepgram error');
-        console.error(error);
-      });
+    // this.gladiaSocket.on("message", async (event) => {
+    //   const gladiaMsg = JSON.parse(event.toString());
+    //   if (!this.fisrtGladiaMessage) {
+    //     console.log(`Gladia web socket connection id: ${gladiaMsg.request_id}`);
+    //     this.fisrtGladiaMessage = true;
+    //   } else if (
+    //     gladiaMsg.hasOwnProperty("transcription") &&
+    //     gladiaMsg.type === "final"
+    //   ) {
+    //     console.log(
+    //       `${callerNumber}: ${gladiaMsg.transcription} (${gladiaMsg.language}) [confidence: ${gladiaMsg.confidence}]`
+    //     );
+    //   }
+    // });
 
-      this.dgConnection.on(LiveTranscriptionEvents.Warning, (warning) => {
-        console.error('STT -> deepgram warning');
-        console.error(warning);
-      });
+    this.gladiaSocket.on('error', (error) => {
+      console.error('STT -> Gladia error'.red);
+      console.error(error);
+    });
 
-      this.dgConnection.on(LiveTranscriptionEvents.Metadata, (metadata) => {
-        console.error('STT -> deepgram metadata');
-        console.error(metadata);
-      });
-
-      this.dgConnection.on(LiveTranscriptionEvents.Close, () => {
-        console.log('STT -> Deepgram connection closed'.yellow);
-      });
+    this.gladiaSocket.on('close', (code, reason) => {
+      console.log(`STT -> Gladia connection closed with code: ${code}, reason: ${reason}`.yellow);
     });
   }
 
   /**
-   * Send the payload to Deepgram
+   * Send the payload to Gladia
    * @param {String} payload A base64 MULAW/8000 audio stream
    */
   send(payload) {
-    if (this.dgConnection.getReadyState() === 1) {
-      this.dgConnection.send(Buffer.from(payload, 'base64'));
+    if (this.gladiaSocket.readyState !== 0) {
+      this.gladiaSocket.send(JSON.stringify({ frames: payload }));
     }
   }
 }
